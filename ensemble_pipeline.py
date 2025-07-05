@@ -1,3 +1,5 @@
+from ingestion import LoadData
+from eval import eval
 import pandas as pd
 import numpy as np
 import torch
@@ -7,9 +9,6 @@ from torch.utils.data import DataLoader, TensorDataset
 from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier
 from sklearn.model_selection import train_test_split, KFold
-from sklearn.pipeline import Pipeline
-from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import OneHotEncoder, MinMaxScaler, LabelEncoder
 from sklearn.metrics import accuracy_score
 from tqdm import tqdm
 import warnings
@@ -20,64 +19,11 @@ cache = {}
 
 class Ensemble:
     def __init__(self):
-        self.train_data = pd.read_csv(r'data\train.csv')
-        self.test_data = pd.read_csv(r'data\test.csv')
-        self.X = self.train_data.drop(columns=['Fertilizer Name', 'id'])
-        self.Y = self.train_data['Fertilizer Name']
         self.models = {}
-        self.label_encoder = None
-        self.preprocessor_pipeline = None
+        self.data = LoadData()
+        self.utils = eval()
 
         self.ensemble()
-
-    @staticmethod
-    def get_transformer(num_columns=None, cat_columns=None, for_label: bool = False):
-        if for_label:
-            return LabelEncoder()
-        
-        scaler = MinMaxScaler()
-        encoder = OneHotEncoder(handle_unknown='ignore')
-
-        num_pipeline = Pipeline(steps=[
-            ('normalization', scaler)
-        ])
-
-        cat_pipeline = Pipeline(steps=[
-            ('encoder', encoder)
-        ])
-
-        combined = ColumnTransformer([
-            ('nums', num_pipeline, num_columns),
-            ('cat', cat_pipeline, cat_columns)
-        ], remainder='passthrough')
-
-        return Pipeline(steps=[
-            ('preprocessor', combined)
-        ])
-    
-    def preprocessor(self):
-        x = self.X
-        y = self.Y
-
-        num_columns = x.select_dtypes(include=['int64', 'float64']).columns
-        cat_columns = x.select_dtypes(include=['object', 'category']).columns
-
-        pipeline = self.get_transformer(num_columns=num_columns, cat_columns=cat_columns)
-        label_pipeline = self.get_transformer(for_label=True)
-
-        print('Transforming Training Data...')
-        values = pipeline.fit_transform(x)
-        labels = label_pipeline.fit_transform(y)
-        print(f'shape of X: {values.shape}, shape of Y: {labels.shape}')
-
-        print('Transforming Test Data...')
-        test_values = pipeline.transform(self.test_data.drop(columns=['id']))
-
-        # Store pipelines for later use
-        self.preprocessor_pipeline = pipeline
-        self.label_encoder = label_pipeline
-
-        return values, labels, test_values
     
     @staticmethod
     def train(build_classifier, X, y, splits, model_name=None):
@@ -132,7 +78,7 @@ class Ensemble:
 
     
     def ensemble(self):
-        x, y, self.x_test = self.preprocessor()
+        x, y, self.x_test = self.data.get_preprocessed_data()
 
         xgb_params = {
             'tree_method': 'hist',
@@ -230,7 +176,7 @@ class Ensemble:
                 val_true = y_val_tensor.cpu().numpy()
                 
                 accuracy = accuracy_score(val_true, val_predictions)
-                map3 = self.map3(val_true, val_outputs.cpu().numpy())
+                map3 = self.utils.map3(val_true, val_outputs.cpu().numpy())
                 
                 avg_loss = epoch_loss / len(train_dataloader)
                 current_lr = optimizer.param_groups[0]['lr']
@@ -240,32 +186,6 @@ class Ensemble:
                 scheduler.step(val_loss)
                 
         self.models['nn'] = model
-
-    def predict_top3(self, probabilities, get_indices: bool = False):
-        top3_predictions = []
-        top3_indices = []
-        
-        for prob_row in probabilities:
-            top3_indice = np.argsort(prob_row)[-3:][::-1]
-            top3_indices.append(top3_indice)
-
-            if not get_indices:
-                top3_labels = self.label_encoder.inverse_transform(top3_indice)
-                
-                top3_string = " ".join(top3_labels)
-                top3_predictions.append(top3_string)
-        
-        return top3_indices if get_indices else top3_predictions
-    
-    def map3(self, y_true, y_predicted):
-        y_predicted = self.predict_top3(y_predicted, get_indices=True)
-        scores = []
-
-        for preds, true in zip(y_predicted, y_true):
-            position_scores = {preds[0]: 1.0, preds[1]: 1/2, preds[2]: 1/3}
-            scores.append(position_scores.get(true, 0.0))
-        
-        return np.mean(scores)
     
     def get_submission(self, path):
         level_1 = self.models['xgb']
@@ -301,10 +221,10 @@ class Ensemble:
             meta_preds = meta_probs.cpu().numpy()
         
         print('Generating top-3 predictions...')
-        top3_fertilizers = self.predict_top3(meta_preds)
+        top3_fertilizers = self.utils.top3(meta_preds, encoder=self.data.get_label_encoder())
         
         submission = pd.DataFrame({
-            'id': self.test_data['id'],
+            'id': self.data.get_test_data()['id'],
             'Fertilizer Name': top3_fertilizers
         })
         
