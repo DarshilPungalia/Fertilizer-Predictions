@@ -1,5 +1,5 @@
 import numpy as np
-from xgboost  import XGBClassifier
+from xgboost  import XGBClassifier, DMatrix
 from sklearn.model_selection import StratifiedKFold
 import optuna
 from ingestion import LoadData
@@ -26,18 +26,19 @@ class XGBoostPipeline:
     
     def objective(self, trial):
         params = {
-            'n_estimators': trial.suggest_int('n_estimators', 128, 1024),
-            'max_depth': trial.suggest_int('max_depth', 3, 12),
+            'n_estimators': trial.suggest_int('n_estimators', 300, 1500),
+            'max_depth': trial.suggest_int('max_depth', 3, 15),
             'learning_rate': trial.suggest_float('learning_rate', 0.05, 0.5, log=True),
-            'subsample': trial.suggest_float('subsample', 0.6, 1.0),
-            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.6, 1.0),
+            'subsample': trial.suggest_float('subsample', 0.7, 1.0),
+            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.7, 1.0),
             'reg_alpha': trial.suggest_float('reg_alpha', 0, 10),
             'reg_lambda': trial.suggest_float('reg_lambda', 0, 10),
         }
         
         cv_scores = []
-        skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+        skf = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)
         
+
         for train_idx, val_idx in skf.split(self.x_sub, self.y_sub):
             x_train, x_val = self.x_sub[train_idx], self.x_sub[val_idx]
             y_train, y_val = self.y_sub[train_idx], self.y_sub[val_idx]
@@ -69,7 +70,7 @@ class XGBoostPipeline:
         
     def xgb(self):
         self.x_train, self.y_train, self.x_test = self.data.get_preprocessed_data()
-        self.x_sub, self.y_sub = self.x_train[:50000], self.y_train[:50000]
+        self.x_sub, self.y_sub = self.x_train[:100000], self.y_train[:100000]
 
         self.optimize_hp()
         self.model = self.train(self.x_train, self.y_train)
